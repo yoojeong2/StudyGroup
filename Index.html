@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>통합 관제 대시보드 (Offline Mode)</title>
+    <style>
+        /* [기본 설정] 윈도우 시스템 폰트 강제 적용 및 초기화 */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: 'Malgun Gothic', 'Dotum', 'Gulim', sans-serif;
+            background-color: #f0f2f5;
+            color: #333333;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* [레이아웃] Flexbox 분할 */
+        .left-panel {
+            width: 25%;
+            background-color: #ffffff;
+            border-right: 1px solid #d1d5db;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.05);
+            z-index: 10;
+        }
+        .right-panel {
+            width: 75%;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            background-color: #f9fafb;
+        }
+
+        /* [공통 UI 요소] */
+        h2 {
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+            color: #1f2937;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 10px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            font-size: 0.9rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #4b5563;
+        }
+        select, button {
+            width: 100%;
+            padding: 10px;
+            font-family: 'Malgun Gothic', 'Dotum', 'Gulim', sans-serif;
+            font-size: 0.95rem;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            background-color: #ffffff;
+        }
+        select:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        button {
+            background-color: #2563eb;
+            color: white;
+            font-weight: bold;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #1d4ed8;
+        }
+        button:active {
+            background-color: #1e3a8a;
+        }
+
+        /* [우측: 필터바] */
+        .filter-bar {
+            display: flex;
+            gap: 15px;
+            background-color: #ffffff;
+            padding: 15px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+        .filter-bar .form-group {
+            margin-bottom: 0;
+            flex: 1;
+        }
+
+        /* [우측: 데이터 테이블] */
+        .table-wrapper {
+            flex: 1;
+            overflow-y: auto;
+            background-color: #ffffff;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: center;
+        }
+        thead th {
+            position: sticky;
+            top: 0;
+            background-color: #f3f4f6;
+            color: #374151;
+            font-weight: bold;
+            padding: 12px 8px;
+            border-bottom: 2px solid #d1d5db;
+            border-right: 1px solid #e5e7eb;
+            z-index: 5;
+            font-size: 0.9rem;
+        }
+        tbody td {
+            padding: 10px 8px;
+            border-bottom: 1px solid #e5e7eb;
+            border-right: 1px solid #e5e7eb;
+            font-size: 0.85rem;
+            word-break: break-all;
+        }
+
+        /* [심각도 배경색 pre-define] */
+        .row-Catastrophic {
+            background-color: #7f1d1d !important;
+            color: #ffffff !important;
+        }
+        .row-Critical {
+            background-color: #fca5a5 !important;
+            color: #7f1d1d !important;
+        }
+        .row-Major {
+            background-color: #fdba74 !important;
+            color: #9a3412 !important;
+        }
+        .row-Minor {
+            background-color: #fef08a !important;
+            color: #854d0e !important;
+        }
+        .row-Normal {
+            background-color: #ffffff;
+            color: #333333;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- [좌측] Agent 이벤트 송신부 -->
+    <div class="left-panel">
+        <h2>이벤트 발생 시뮬레이터 (Agent)</h2>
+        
+        <div class="form-group">
+            <label for="agentModule">모듈 선택</label>
+            <select id="agentModule">
+                <option value="AMCM">AMCM</option>
+                <option value="DBMM">DBMM</option>
+                <option value="EIM">EIM</option>
+                <option value="NDGM">NDGM</option>
+                <option value="UDGM">UDGM</option>
+                <option value="ICM">ICM</option>
+                <option value="ODPM">ODPM</option>
+                <option value="MCM">MCM</option>
+                <option value="SCMM">SCMM</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="agentLevel">이벤트 레벨</label>
+            <select id="agentLevel">
+                <option value="ERROR">ERROR</option>
+                <option value="WARN">WARN</option>
+                <option value="INFO">INFO</option>
+                <option value="DEBUG">DEBUG</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="agentType">이벤트 종류</label>
+            <select id="agentType">
+                <option value="네트워크 단절">네트워크 단절</option>
+                <option value="프로세스 다운">프로세스 다운</option>
+                <option value="리소스 임계치 초과">리소스 임계치 초과</option>
+                <option value="데이터 처리 지연">데이터 처리 지연</option>
+                <option value="단순 상태 보고">단순 상태 보고</option>
+            </select>
+        </div>
+
+        <button id="btnSend">이벤트 전송</button>
+    </div>
+
+    <!-- [우측] Manager 관제 대시보드 -->
+    <div class="right-panel">
+        <h2>실시간 관제 대시보드 (Manager)</h2>
+        
+        <!-- 상단 필터바 -->
+        <div class="filter-bar">
+            <div class="form-group">
+                <label for="filterModule">모듈 필터</label>
+                <select id="filterModule">
+                    <option value="ALL">전체</option>
+                    <option value="AMCM">AMCM</option>
+                    <option value="DBMM">DBMM</option>
+                    <option value="EIM">EIM</option>
+                    <option value="NDGM">NDGM</option>
+                    <option value="UDGM">UDGM</option>
+                    <option value="ICM">ICM</option>
+                    <option value="ODPM">ODPM</option>
+                    <option value="MCM">MCM</option>
+                    <option value="SCMM">SCMM</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="filterLevel">수신 레벨 필터</label>
+                <select id="filterLevel">
+                    <option value="ALL">전체</option>
+                    <option value="ERROR">ERROR</option>
+                    <option value="WARN">WARN</option>
+                    <option value="INFO">INFO</option>
+                    <option value="DEBUG">DEBUG</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="filterSeverity">판단 심각도 필터</label>
+                <select id="filterSeverity">
+                    <option value="ALL">전체</option>
+                    <option value="Catastrophic">Catastrophic</option>
+                    <option value="Critical">Critical</option>
+                    <option value="Major">Major</option>
+                    <option value="Minor">Minor</option>
+                    <option value="Normal">Normal</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- 데이터 테이블 -->
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 12%;">최초 시각</th>
+                        <th style="width: 12%;">최근 시각</th>
+                        <th style="width: 10%;">모듈</th>
+                        <th style="width: 10%;">수신 레벨</th>
+                        <th style="width: 15%;">이벤트 종류</th>
+                        <th style="width: 12%;">판단 심각도</th>
+                        <th style="width: 8%;">누적 건수</th>
+                        <th style="width: 21%;">메시지</th>
+                    </tr>
+                </thead>
+                <tbody id="managerTableBody">
+                    <!-- JavaScript를 통해 동적 렌더링 -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // 최신 대시보드 데이터를 저장하는 전역 변수 (필터링 렌더링용)
+        let currentDashboardData = [];
+
+        // 1. 이벤트 전송 (POST API)
+        document.getElementById('btnSend').addEventListener('click', async () => {
+            const module = document.getElementById('agentModule').value;
+            const level = document.getElementById('agentLevel').value;
+            const type = document.getElementById('agentType').value;
+            
+            const payload = {
+                module: module,
+                level: level,
+                type: type
+            };
+
+            try {
+                const response = await fetch('/api/events', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (!response.ok) {
+                    console.error('이벤트 전송 실패. Status:', response.status);
+                }
+            } catch (error) {
+                console.error('C++ 백엔드 통신 오류(POST):', error);
+            }
+        });
+
+        // 2. 데이터 수신 (GET API - Polling)
+        async function fetchDashboardData() {
+            try {
+                const response = await fetch('/api/dashboard');
+                if (response.ok) {
+                    const data = await response.json();
+                    currentDashboardData = data; // 데이터 캐싱
+                    renderTable(); // 테이블 갱신
+                } else {
+                    console.error('대시보드 데이터 수신 실패. Status:', response.status);
+                }
+            } catch (error) {
+                console.error('C++ 백엔드 통신 오류(GET):', error);
+            }
+        }
+
+        // 3. 테이블 렌더링 및 필터링 로직
+        function renderTable() {
+            const tbody = document.getElementById('managerTableBody');
+            tbody.innerHTML = ''; // 기존 내용 초기화
+
+            const filterModule = document.getElementById('filterModule').value;
+            const filterLevel = document.getElementById('filterLevel').value;
+            const filterSeverity = document.getElementById('filterSeverity').value;
+
+            currentDashboardData.forEach(item => {
+                // 필터 조건 검사 (조건에 맞지 않으면 렌더링 스킵 -> 숨김 처리 효과)
+                if (filterModule !== 'ALL' && item.module !== filterModule) return;
+                if (filterLevel !== 'ALL' && item.level !== filterLevel) return;
+                if (filterSeverity !== 'ALL' && item.severity !== filterSeverity) return;
+
+                const tr = document.createElement('tr');
+                
+                // 심각도에 따른 행 클래스 부여
+                const severityClass = item.severity ? `row-${item.severity}` : 'row-Normal';
+                tr.className = severityClass;
+
+                // 프론트엔드 연산 배제 원칙: 백엔드에서 준 값을 그대로 바인딩
+                tr.innerHTML = `
+                    <td>${item.firstTime || '-'}</td>
+                    <td>${item.lastTime || '-'}</td>
+                    <td>${item.module || '-'}</td>
+                    <td>${item.level || '-'}</td>
+                    <td>${item.type || '-'}</td>
+                    <td>${item.severity || '-'}</td>
+                    <td>${item.count !== undefined ? item.count : '-'}</td>
+                    <td>${item.message || '-'}</td>
+                `;
+
+                tbody.appendChild(tr);
+            });
+        }
+
+        // 필터 변경 시 즉시 테이블 재렌더링 이벤트 등록
+        document.getElementById('filterModule').addEventListener('change', renderTable);
+        document.getElementById('filterLevel').addEventListener('change', renderTable);
+        document.getElementById('filterSeverity').addEventListener('change', renderTable);
+
+        // 초기 로드 시 1회 호출 및 1초(1000ms) 간격 Polling 시작
+        fetchDashboardData();
+        setInterval(fetchDashboardData, 1000);
+    </script>
+</body>
+</html>
