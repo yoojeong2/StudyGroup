@@ -20,8 +20,11 @@ The frontend calls relative endpoints on the same origin:
 libraries in `third_party/` (`httplib.h`, `json.hpp`) — no package manager / internet
 needed.
 
-- Build: `make` (or `g++ -std=c++17 -O2 -pthread main.cpp -o server`). The `server`
-  binary is git-ignored.
+- Build (Linux/macOS): `make` (or `g++ -std=c++17 -O2 -pthread main.cpp -o server`).
+- Build (Windows / Visual Studio): use CMake ("Open Folder" in VS, or `cmake -S . -B build`
+  then `cmake --build build`). MSVC needs the `/utf-8` flag (already set in `CMakeLists.txt`)
+  for the Korean string literals; `httplib.h` auto-links `ws2_32`. The build dir and the
+  `server` binary are git-ignored.
 - Run: `./server` (optional port arg: `./server 9000`), then open `http://localhost:8080/`.
   The server serves the page at `/` and `/Index.html`, so origin matches the API.
 - Escalation window is 10 minutes (600s) per spec. It can be overridden ONLY for testing

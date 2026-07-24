@@ -2,3 +2,8 @@
 /server
 *.o
 *.obj
+
+# CMake / Visual Studio 빌드 폴더
+/build/
+/out/
+/.vs/

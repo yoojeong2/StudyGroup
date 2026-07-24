@@ -98,7 +98,11 @@ static long windowSeconds() {
 static std::string toTimeString(const time_point& tp) {
     std::time_t t = clock_t_::to_time_t(tp);
     std::tm tm_buf{};
-    localtime_r(&t, &tm_buf);
+#if defined(_WIN32)
+    localtime_s(&tm_buf, &t);   // MSVC (인자 순서가 POSIX와 반대)
+#else
+    localtime_r(&t, &tm_buf);   // POSIX
+#endif
     char buf[32];
     std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_buf);
     return std::string(buf);
