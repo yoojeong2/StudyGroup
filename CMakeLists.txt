@@ -16,7 +16,7 @@ else()
     target_link_libraries(server PRIVATE Threads::Threads)
 endif()
 
-# 실행 파일 옆에 Index.html을 복사해 두어, 빌드 폴더에서 실행해도 프론트엔드가 서빙되도록 함.
+# 실행 파일 옆에 index.html을 복사해 두어, 빌드 폴더에서 실행해도 프론트엔드가 서빙되도록 함.
 add_custom_command(TARGET server POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/Index.html" "$<TARGET_FILE_DIR:server>/Index.html")
+        "${CMAKE_CURRENT_SOURCE_DIR}/index.html" "$<TARGET_FILE_DIR:server>/index.html")

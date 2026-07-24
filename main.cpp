@@ -9,19 +9,22 @@
 //  빌드 (인터넷/패키지 매니저 불필요):
 //    g++ -std=c++17 -O2 -pthread main.cpp -o server
 //  실행:
-//    ./server            # 기본 포트 8080, 현재 폴더의 Index.html 서빙
+//    ./server            # 기본 포트 8080, 현재 폴더의 index.html 서빙
 //
 //  프론트엔드는 상대경로(/api/events, /api/dashboard)로 호출하므로 이 서버가
-//  정적 파일(Index.html)까지 같은 오리진에서 함께 서빙한다.
+//  정적 파일(index.html)까지 같은 오리진에서 함께 서빙한다.
 // =============================================================================
 
 #include "third_party/httplib.h"
 #include "third_party/json.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <ctime>
+#include <deque>
 #include <fstream>
 #include <mutex>
 #include <sstream>
@@ -74,7 +77,10 @@ struct AlarmRecord {
     int         severity = NORMAL;           // 최종(상향 반영) 심각도
     time_point  first_time;                  // 최초 발생 시각 (제거되지 않음)
     time_point  last_time;                   // 최근 발생 시각
-    std::vector<time_point> occurrence_times; // 발생 시각 목록 (10분 슬라이딩 윈도우)
+    // 발생 시각 목록 (10분 슬라이딩 윈도우). 알람 폭주(Event Storm) 대비:
+    // 항상 시간순으로 뒤에 push 되므로, 만료분은 앞쪽 연속 구간이다. deque를 쓰면
+    // 앞에서 pop_front()로 O(1) 삭제가 가능해 vector 대비 메모리 이동 부하가 없다.
+    std::deque<time_point> occurrence_times;
 };
 
 // 전역 저장소: Key = moduleId + "_" + eventType
@@ -108,10 +114,10 @@ static std::string toTimeString(const time_point& tp) {
     return std::string(buf);
 }
 
-// Index.html 파일 내용을 읽어 반환 (없으면 빈 문자열)
+// index.html 파일 내용을 읽어 반환 (없으면 빈 문자열)
 static std::string readIndexHtml() {
     const char* env = std::getenv("INDEX_FILE");
-    std::string path = env ? env : "Index.html";
+    std::string path = env ? env : "index.html";
     std::ifstream ifs(path, std::ios::binary);
     if (!ifs) return std::string();
     std::ostringstream oss;
@@ -153,12 +159,13 @@ static void handlePostEvent(const std::string& module,
 
     AlarmRecord& rec = it->second;
 
-    // [윈도우 정리] 10분(600초)이 지난 오래된 타임스탬프 제거
+    // [윈도우 정리] 10분(600초)이 지난 오래된 타임스탬프 제거.
+    // 시간순 정렬이 보장되므로 앞에서부터 만료분만 pop_front (O(1) x 제거건수).
     const time_point cutoff = now - window;
-    auto& times = rec.occurrence_times;
-    times.erase(std::remove_if(times.begin(), times.end(),
-                               [&](const time_point& t) { return t < cutoff; }),
-                times.end());
+    std::deque<time_point>& times = rec.occurrence_times;
+    while (!times.empty() && times.front() < cutoff) {
+        times.pop_front();
+    }
 
     // [심각도 판단] 기본 심각도 재계산 후 상향 조건 검사
     int sev = baseSeverity(rec.level, rec.type);
@@ -210,6 +217,21 @@ static json buildDashboard() {
     return arr;
 }
 
+// -----------------------------------------------------------------------------
+// 우아한 종료(Graceful Shutdown): SIGINT(Ctrl+C)/SIGTERM 수신 시 accept 루프를
+// 빠져나와 서버를 정상적으로 닫는다. 진행 중이던 요청 처리는 마무리되고, 포트가
+// 비정상적으로 점유된 채 남는 일을 방지한다.
+// -----------------------------------------------------------------------------
+static httplib::Server*  g_server = nullptr;
+static std::atomic<bool> g_shutting_down{false};
+
+static void handleSignal(int /*sig*/) {
+    g_shutting_down.store(true);
+    if (g_server) {
+        g_server->stop(); // listen() 루프 종료 유도
+    }
+}
+
 int main(int argc, char** argv) {
     int port = 8080;
     if (argc > 1) {
@@ -223,7 +245,7 @@ int main(int argc, char** argv) {
         std::string html = readIndexHtml();
         if (html.empty()) {
             res.status = 404;
-            res.set_content("Index.html not found", "text/plain; charset=utf-8");
+            res.set_content("index.html not found", "text/plain; charset=utf-8");
         } else {
             res.set_content(html, "text/html; charset=utf-8");
         }
@@ -260,13 +282,22 @@ int main(int argc, char** argv) {
         res.set_content(arr.dump(), "application/json; charset=utf-8");
     });
 
+    // 종료 시그널 등록 (우아한 종료)
+    g_server = &svr;
+    std::signal(SIGINT, handleSignal);
+    std::signal(SIGTERM, handleSignal);
+
     printf("통합 관제 백엔드 서버 시작: http://localhost:%d  (판별 윈도우 %lds)\n",
            port, windowSeconds());
+    printf("종료하려면 Ctrl+C 를 누르세요.\n");
     fflush(stdout);
 
-    if (!svr.listen("0.0.0.0", port)) {
+    const bool ok = svr.listen("0.0.0.0", port);
+    if (!ok && !g_shutting_down.load()) {
         fprintf(stderr, "서버 시작 실패 (포트 %d 사용 중일 수 있음)\n", port);
         return 1;
     }
+
+    printf("서버를 정상적으로 종료했습니다.\n");
     return 0;
 }
