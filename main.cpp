@@ -87,7 +87,7 @@ struct AlarmRecord {
     std::deque<time_point> occurrence_times;
 };
 
-// 전역 저장소: Key = moduleId + "_" + eventType
+// 전역 저장소: Key = module + "_" + type + "_" + level (복합 키)
 static std::unordered_map<std::string, AlarmRecord> g_alarms;
 static std::mutex g_mtx;
 
@@ -136,7 +136,10 @@ static void handlePostEvent(const std::string& module,
                             const std::string& level,
                             const std::string& type) {
     const time_point now = clock_t_::now();
-    const std::string key = module + "_" + type;
+    // 복합 키(Composite Key) = module + type + level.
+    // level 을 키에 포함하므로, 같은 모듈/종류라도 레벨이 다르면 별도 알람으로 집계되어
+    // 기존 상태(예: Critical)가 다른 레벨(예: Debug) 이벤트로 덮어씌워지지 않는다.
+    const std::string key = module + "_" + type + "_" + level;
     const std::chrono::seconds window(windowSeconds());
 
     std::lock_guard<std::mutex> lock(g_mtx);
@@ -153,9 +156,9 @@ static void handlePostEvent(const std::string& module,
         rec.occurrence_times.push_back(now);
         it = g_alarms.emplace(key, std::move(rec)).first;
     } else {
-        // [중복 제거] 누적 건수 +1, 발생 시각 추가
+        // [중복 집계] module/type/level 이 모두 일치하는 기존 항목: 누적 건수 +1, 발생 시각 추가.
+        // level 은 키의 일부라 항상 동일하므로 덮어쓰지 않는다.
         AlarmRecord& rec = it->second;
-        rec.level = level; // 동일 종류 내 최신 레벨 반영
         rec.count += 1;
         rec.last_time = now;
         rec.occurrence_times.push_back(now);
