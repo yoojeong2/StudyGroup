@@ -18,6 +18,10 @@
 #include "third_party/httplib.h"
 #include "third_party/json.hpp"
 
+#if defined(_WIN32)
+#include <windows.h>  // SetConsoleOutputCP (콘솔 UTF-8 출력용)
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -233,6 +237,13 @@ static void handleSignal(int /*sig*/) {
 }
 
 int main(int argc, char** argv) {
+#if defined(_WIN32)
+    // Windows 콘솔(cmd/PowerShell)은 기본 코드페이지가 UTF-8이 아니라서 한글 로그가
+    // 깨져 보인다(외계어). 콘솔 출력 코드페이지를 UTF-8(65001)로 바꿔 정상 표시한다.
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
+
     int port = 8080;
     if (argc > 1) {
         try { port = std::stoi(argv[1]); } catch (...) {}
