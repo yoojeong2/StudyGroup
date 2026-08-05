@@ -58,15 +58,27 @@ static const long ESC_PROCESS_DOWN_SEC   = envLong("ESC_PROCESS_DOWN_SEC", 60); 
 static const long ESC_PROCESS_DOWN_COUNT = envLong("ESC_PROCESS_DOWN_COUNT", 3);   // 프로세스 다운 누적 3건 -> Critical
 static const long ESC_RESOURCE_SEC       = envLong("ESC_RESOURCE_SEC", 300);       // 리소스 임계치 초과 5분 -> Major
 
-// 이벤트 종류 상수
+// 이벤트 종류 상수 - [장애(에러) 유형]
 static const char* T_NET_DISCONNECT = "네트워크 단절";
 static const char* T_PROCESS_DOWN   = "프로세스 다운";
 static const char* T_RESOURCE_OVER  = "리소스 임계치 초과";
 static const char* T_DATA_DELAY     = "데이터 처리 지연";
+// 이벤트 종류 상수 - [복구(정상) 유형] : 프론트엔드에서 장애/복구 유형이 분리되어 전송됨
+static const char* T_NET_RECOVER    = "네트워크 복구";
+static const char* T_PROCESS_OK     = "프로세스 정상화";
+static const char* T_RESOURCE_OK    = "리소스 정상";
+static const char* T_DATA_OK        = "처리 정상화";
 
-static bool isFaultType(const std::string& type) {
-    return type == T_NET_DISCONNECT || type == T_PROCESS_DOWN ||
-           type == T_RESOURCE_OVER  || type == T_DATA_DELAY;
+// [장애-복구 페어링 맵] 복구(정상) 유형 -> 대응 장애 유형. 매칭 없으면 빈 문자열.
+static std::string pairedFaultType(const std::string& recoveryType) {
+    if (recoveryType == T_NET_RECOVER) return T_NET_DISCONNECT;
+    if (recoveryType == T_PROCESS_OK)  return T_PROCESS_DOWN;
+    if (recoveryType == T_RESOURCE_OK) return T_RESOURCE_OVER;
+    if (recoveryType == T_DATA_OK)     return T_DATA_DELAY;
+    return "";
+}
+static bool isRecoveryType(const std::string& type) {
+    return !pairedFaultType(type).empty();
 }
 static bool isErrorLevel(const std::string& level) {
     return level == "ERROR" || level == "WARN";
@@ -156,18 +168,17 @@ static void handlePostEvent(const std::string& module,
 
     std::lock_guard<std::mutex> lock(g_mtx);
 
-    // ===== [Case A] 복구 이벤트(INFO) 수신 - 장애-복구 페어링 =====
-    // level == INFO 이고 복구 유형(장애 종류)일 때: 동일 module 의 진행 중 에러 알람(짝꿍)을
-    // 백엔드가 즉시 Closed 처리(맵에서 제거)하고, 복구 이벤트 자체를 새 활성 알람으로 등록.
-    if (level == "INFO" && isFaultType(type)) {
-        for (auto it = g_active.begin(); it != g_active.end(); ) {
-            const Alarm& a = it->second;
-            const bool pairedError = (a.module == module) && isErrorLevel(a.level) &&
-                                     (a.status == "Open" || a.status == "In Progress");
-            if (pairedError) {
-                it = g_active.erase(it);   // Closed -> 활성 맵에서 즉시 제거(메모리 회수)
-            } else {
-                ++it;
+    // ===== [Case A] 복구(정상) 이벤트 수신 - 장애-복구 페어링 =====
+    // 프론트엔드가 장애/복구 유형을 분리해 전송한다(예: "네트워크 단절" vs "네트워크 복구").
+    // 복구 유형이면: 동일 module 에서 대응 장애 유형(짝꿍)의 진행 중 에러 알람을 즉시
+    // Closed 처리(맵에서 제거)하고, 복구 이벤트 자체를 새 활성 알람(Open/Normal)으로 등록.
+    if (level == "INFO" && isRecoveryType(type)) {
+        const std::string faultType = pairedFaultType(type);
+        auto fit = g_active.find(activeKey(module, faultType));
+        if (fit != g_active.end()) {
+            const Alarm& a = fit->second;
+            if (isErrorLevel(a.level) && (a.status == "Open" || a.status == "In Progress")) {
+                g_active.erase(fit);   // 짝꿍 장애 알람 Closed -> 활성 맵에서 즉시 제거
             }
         }
         Alarm rec;
