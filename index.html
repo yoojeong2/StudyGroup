@@ -1,202 +1,255 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>통합 관제 대시보드 (Lifecycle & Pairing Applied)</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: 'Malgun Gothic', 'Dotum', sans-serif;
-            background-color: #f0f2f5; color: #333;
-            display: flex; height: 100vh; overflow: hidden;
-        }
-        .left-panel { width: 25%; background: #fff; border-right: 1px solid #ccc; padding: 20px; display: flex; flex-direction: column; z-index: 10; }
-        .right-panel { width: 75%; padding: 20px; display: flex; flex-direction: column; background: #f9fafb; }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>대시보드</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Malgun Gothic', 'Dotum', sans-serif;
+            background-color: #f0f2f5; color: #333;
+            display: flex; height: 100vh; overflow: hidden;
+        }
+        .left-panel { width: 28%; background: #fff; border-right: 1px solid #ccc; padding: 20px; display: flex; flex-direction: column; z-index: 10; overflow-y: auto; }
+        .right-panel { width: 72%; padding: 20px; display: flex; flex-direction: column; background: #f9fafb; }
 
-        h2 { font-size: 1.2rem; margin-bottom: 20px; color: #111; border-bottom: 2px solid #ddd; padding-bottom: 10px; }
-        .form-group { margin-bottom: 15px; }
-        label { display: block; font-size: 0.9rem; font-weight: bold; margin-bottom: 5px; color: #555; }
-        select, input, button { width: 100%; padding: 8px; font-family: inherit; border: 1px solid #ccc; border-radius: 4px; }
-        
-        button { background-color: #2563eb; color: white; font-weight: bold; border: none; cursor: pointer; padding: 10px; margin-top: 5px; }
-        button:hover { background-color: #1d4ed8; }
+        h2 { font-size: 1.2rem; margin-bottom: 20px; color: #111; border-bottom: 2px solid #ddd; padding-bottom: 10px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; font-size: 0.9rem; font-weight: bold; margin-bottom: 5px; color: #555; }
+        select, input, button { width: 100%; padding: 8px; font-family: inherit; border: 1px solid #ccc; border-radius: 4px; }
+        
+        button { background-color: #2563eb; color: white; font-weight: bold; border: none; cursor: pointer; padding: 10px; margin-top: 5px; }
+        button:hover { background-color: #1d4ed8; }
 
-        .filter-bar { display: flex; gap: 15px; background: #fff; padding: 15px; border: 1px solid #ccc; border-radius: 6px; margin-bottom: 15px; }
-        .filter-bar .form-group { margin-bottom: 0; flex: 1; }
-        
-        .table-wrapper { flex: 1; overflow-y: auto; background: #fff; border: 1px solid #ccc; border-radius: 6px; }
-        table { width: 100%; border-collapse: collapse; text-align: center; }
-        thead th { position: sticky; top: 0; background: #e5e7eb; padding: 10px 5px; font-size: 0.9rem; border-bottom: 2px solid #aaa; z-index: 5; }
-        tbody td { padding: 8px 5px; border-bottom: 1px solid #eee; font-size: 0.85rem; vertical-align: middle; }
+        .filter-bar { display: flex; gap: 15px; background: #fff; padding: 15px; border: 1px solid #ccc; border-radius: 6px; margin-bottom: 15px; }
+        .filter-bar .form-group { margin-bottom: 0; flex: 1; }
+        
+        .table-wrapper { flex: 1; overflow-y: auto; background: #fff; border: 1px solid #ccc; border-radius: 6px; }
+        table { width: 100%; border-collapse: collapse; text-align: center; }
+        thead th { position: sticky; top: 0; background: #e5e7eb; padding: 10px 5px; font-size: 0.9rem; border-bottom: 2px solid #aaa; z-index: 5; }
+        tbody td { padding: 8px 5px; border-bottom: 1px solid #eee; font-size: 0.85rem; vertical-align: middle; }
 
-        /* 뱃지 및 액션 스타일 */
-        .badge { padding: 4px 8px; border-radius: 12px; font-weight: bold; font-size: 0.75rem; }
-        .badge.open { background-color: #fee2e2; color: #991b1b; border: 1px solid #f87171; }
-        .badge.inprogress { background-color: #fef3c7; color: #92400e; border: 1px solid #fbbf24; }
+        .badge { padding: 4px 8px; border-radius: 12px; font-weight: bold; font-size: 0.75rem; }
+        .badge.open { background-color: #fee2e2; color: #991b1b; border: 1px solid #f87171; }
+        .badge.inprogress { background-color: #fef3c7; color: #92400e; border: 1px solid #fbbf24; }
 
-        .btn-action { width: auto; padding: 4px 8px; font-size: 0.75rem; border-radius: 3px; margin: 0 2px; display: inline-block; }
-        .btn-ack { background-color: #10b981; } .btn-ack:hover { background-color: #059669; }
-        .btn-close { background-color: #6b7280; } .btn-close:hover { background-color: #4b5563; }
+        .btn-action { width: auto; padding: 4px 8px; font-size: 0.75rem; border-radius: 3px; margin: 0 2px; display: inline-block; }
+        .btn-ack { background-color: #10b981; } .btn-ack:hover { background-color: #059669; }
+        .btn-close { background-color: #6b7280; } .btn-close:hover { background-color: #4b5563; }
 
-        /* 심각도 행 스타일 */
-        .row-Catastrophic { background-color: #7f1d1d !important; color: white; }
-        .row-Critical { background-color: #fca5a5 !important; color: #7f1d1d; }
-        .row-Major { background-color: #fdba74 !important; color: #9a3412; }
-        .row-Minor { background-color: #fef08a !important; color: #854d0e; }
-        .row-Normal { background-color: #ffffff; color: #333; }
-    </style>
+        .row-Catastrophic { background-color: #7f1d1d !important; color: white; }
+        .row-Critical { background-color: #fca5a5 !important; color: #7f1d1d; }
+        .row-Major { background-color: #fdba74 !important; color: #9a3412; }
+        .row-Minor { background-color: #fef08a !important; color: #854d0e; }
+        .row-Normal { background-color: #ffffff; color: #333; }
+    </style>
 </head>
 <body>
 
-    <!-- Agent 송신부 (에러 및 복구 이벤트 시뮬레이션) -->
-    <div class="left-panel">
-        <h2>Agent 모의 송신기</h2>
-        <div class="form-group">
-            <label>모듈 선택</label>
-            <select id="agentModule">
-                <option value="AMCM">AMCM</option>
-                <option value="DBMM">DBMM</option>
-                <option value="EIM">EIM</option>
-            </select>
-        </div>
-        <div class="form-group">
-            <label>이벤트 레벨</label>
-            <select id="agentLevel">
-                <option value="ERROR">ERROR (장애 발생)</option>
-                <option value="WARN">WARN (임계치 초과)</option>
-                <option value="INFO">INFO (정상 복구)</option>
-            </select>
-        </div>
-        <div class="form-group">
-            <label>이벤트 종류 (현상/복구)</label>
-            <select id="agentType">
-                <option value="네트워크 단절">네트워크 단절 / 복구</option>
-                <option value="프로세스 다운">프로세스 다운 / 정상화</option>
-                <option value="리소스 임계치 초과">리소스 임계치 초과 / 정상</option>
-            </select>
-        </div>
-        <div class="form-group">
-            <label>메시지</label>
-            <input type="text" id="agentMessage" value="상태 변경 감지됨">
-        </div>
-        <button id="btnSend">이벤트 전송 (POST)</button>
-    </div>
+    <div class="left-panel">
+        <h2>Agent 모의 송신기</h2>
+        
+        <div class="form-group">
+            <label>모듈 선택 (9개 시스템)</label>
+            <select id="agentModule">
+                <option value="AMCM">AMCM</option>
+                <option value="DBMM">DBMM</option>
+                <option value="EIM">EIM</option>
+                <option value="MCM">MCM</option>
+                <option value="SCMM">SCMM</option>
+                <option value="NDGM">NDGM</option>
+                <option value="ICM">ICM</option>
+                <option value="ODPM">ODPM</option>
+                <option value="UDGM">UDGM</option>
+            </select>
+        </div>
 
-    <!-- Manager 대시보드 수신부 -->
-    <div class="right-panel">
-        <h2>실시간 관제 대시보드 (Manager)</h2>
-        <div class="filter-bar">
-            <div class="form-group"><label>모듈 필터</label><select id="filterModule"><option value="ALL">전체</option><option value="AMCM">AMCM</option><option value="DBMM">DBMM</option></select></div>
-            <div class="form-group"><label>심각도 필터</label><select id="filterSeverity"><option value="ALL">전체</option><option value="Critical">Critical</option><option value="Major">Major</option><option value="Minor">Minor</option><option value="Normal">Normal</option></select></div>
-            <div class="form-group"><label>상태 필터</label><select id="filterStatus"><option value="ALL">전체</option><option value="Open">Open</option><option value="In Progress">In Progress</option></select></div>
-        </div>
+        <div class="form-group">
+            <label>이벤트 레벨</label>
+            <select id="agentLevel">
+                <option value="ERROR">ERROR</option>
+                <option value="WARN">WARN</option>
+                <option value="INFO">INFO</option>
+                <option value="DEBUG">DEBUG</option>
+            </select>
+        </div>
 
-        <div class="table-wrapper">
-            <table>
-                <thead>
-                    <tr>
-                        <th style="width: 12%;">최근 갱신</th>
-                        <th style="width: 8%;">모듈</th>
-                        <th style="width: 15%;">이벤트 종류</th>
-                        <th style="width: 10%;">심각도</th>
-                        <th style="width: 10%;">상태</th>
-                        <th style="width: 6%;">건수</th>
-                        <th style="width: 24%;">메시지</th>
-                        <th style="width: 15%;">조치 액션</th>
-                    </tr>
-                </thead>
-                <tbody id="managerTableBody">
-                    <!-- Dynamic Rendering -->
-                </tbody>
-            </table>
-        </div>
-    </div>
+        <div class="form-group">
+            <label>이벤트 유형 (장애 및 복구 페어링)</label>
+            <select id="agentType">
+                <option value="네트워크 단절">네트워크 단절 (ERROR)</option>
+                <option value="네트워크 복구">네트워크 복구 (INFO)</option>
+                <option value="프로세스 다운">프로세스 다운 (ERROR)</option>
+                <option value="프로세스 정상화">프로세스 정상화 (INFO)</option>
+                <option value="리소스 임계치 초과">리소스 임계치 초과 (WARN)</option>
+                <option value="리소스 정상">리소스 정상 (INFO)</option>
+                <option value="데이터 처리 지연">데이터 처리 지연 (WARN)</option>
+                <option value="처리 정상화">처리 정상화 (INFO)</option>
+            </select>
+        </div>
 
-    <script>
-        let currentDashboardData = [];
+        <div class="form-group">
+            <label>메시지</label>
+            <input type="text" id="agentMessage" value="상태 변경 이벤트 팩트">
+        </div>
+        <button id="btnSend">이벤트 전송 (POST)</button>
+    </div>
 
-        document.getElementById('btnSend').addEventListener('click', async () => {
-            const payload = {
-                module: document.getElementById('agentModule').value,
-                level: document.getElementById('agentLevel').value,
-                type: document.getElementById('agentType').value,
-                message: document.getElementById('agentMessage').value
-            };
-            try {
-                await fetch('/api/events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                fetchDashboardData();
-            } catch (e) { console.error('송신 오류:', e); }
-        });
+    <div class="right-panel">
+        <h2>실시간 관제 대시보드 (Manager)</h2>
+        <div class="filter-bar">
+            <div class="form-group">
+                <label>모듈 필터</label>
+                <select id="filterModule">
+                    <option value="ALL">전체</option>
+                    <option value="AMCM">AMCM</option>
+                    <option value="DBMM">DBMM</option>
+                    <option value="EIM">EIM</option>
+                    <option value="MCM">MCM</option>
+                    <option value="SCMM">SCMM</option>
+                    <option value="NDGM">NDGM</option>
+                    <option value="ICM">ICM</option>
+                    <option value="ODPM">ODPM</option>
+                    <option value="UDGM">UDGM</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>심각도 필터</label>
+                <select id="filterSeverity">
+                    <option value="ALL">전체</option>
+                    <option value="Catastrophic">Catastrophic</option>
+                    <option value="Critical">Critical</option>
+                    <option value="Major">Major</option>
+                    <option value="Minor">Minor</option>
+                    <option value="Normal">Normal</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>상태 필터</label>
+                <select id="filterStatus">
+                    <option value="ALL">전체</option>
+                    <option value="Open">Open</option>
+                    <option value="In Progress">In Progress</option>
+                </select>
+            </div>
+        </div>
 
-        window.changeStatus = async function(eventId, newStatus) {
-            try {
-                await fetch(`/api/events/${eventId}/status`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ status: newStatus })
-                });
-                fetchDashboardData();
-            } catch (e) { console.error('상태 변경 오류:', e); }
-        };
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 12%;">최근 갱신</th>
+                        <th style="width: 8%;">모듈</th>
+                        <th style="width: 18%;">이벤트 유형</th>
+                        <th style="width: 10%;">심각도</th>
+                        <th style="width: 10%;">상태</th>
+                        <th style="width: 6%;">건수</th>
+                        <th style="width: 21%;">메시지</th>
+                        <th style="width: 15%;">조치 액션</th>
+                    </tr>
+                </thead>
+                <tbody id="managerTableBody">
+                </tbody>
+            </table>
+        </div>
+    </div>
 
-        async function fetchDashboardData() {
-            try {
-                const response = await fetch('/api/dashboard');
-                if (response.ok) {
-                    currentDashboardData = await response.json();
-                    renderTable();
-                }
-            } catch (e) { console.error('수신 오류:', e); }
-        }
+    <script>
+        let currentDashboardData = [];
 
-        function renderTable() {
-            const tbody = document.getElementById('managerTableBody');
-            tbody.innerHTML = ''; 
-            
-            const fModule = document.getElementById('filterModule').value;
-            const fSeverity = document.getElementById('filterSeverity').value;
-            const fStatus = document.getElementById('filterStatus').value;
+        document.getElementById('agentType').addEventListener('change', (e) => {
+            const val = e.target.value;
+            const levelSelect = document.getElementById('agentLevel');
+            if (val.includes('복구') || val.includes('정상화') || val.includes('정상')) {
+                levelSelect.value = 'INFO';
+            } else if (val.includes('임계치') || val.includes('지연')) {
+                levelSelect.value = 'WARN';
+            } else {
+                levelSelect.value = 'ERROR';
+            }
+        });
 
-            currentDashboardData.forEach(item => {
-                if (fModule !== 'ALL' && item.module !== fModule) return;
-                if (fSeverity !== 'ALL' && item.severity !== fSeverity) return;
-                if (fStatus !== 'ALL' && item.status !== fStatus) return;
+        document.getElementById('btnSend').addEventListener('click', async () => {
+            const payload = {
+                module: document.getElementById('agentModule').value,
+                level: document.getElementById('agentLevel').value,
+                type: document.getElementById('agentType').value,
+                message: document.getElementById('agentMessage').value
+            };
+            try {
+                await fetch('/api/events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                fetchDashboardData();
+            } catch (e) { console.error('송신 오류:', e); }
+        });
 
-                const tr = document.createElement('tr');
-                tr.className = `row-${item.severity || 'Normal'}`;
+        window.changeStatus = async function(eventId, newStatus) {
+            try {
+                await fetch(`/api/events/${eventId}/status`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: newStatus })
+                });
+                fetchDashboardData();
+            } catch (e) { console.error('상태 변경 오류:', e); }
+        };
 
-                let statusBadge = '';
-                let actionButtons = '';
-                
-                if (item.status === 'Open') {
-                    statusBadge = `<span class="badge open">Open (신규)</span>`;
-                    actionButtons = `<button class="btn-action btn-ack" onclick="changeStatus('${item.eventId}', 'In Progress')">인지</button>`;
-                } else if (item.status === 'In Progress') {
-                    statusBadge = `<span class="badge inprogress">In Progress</span>`;
-                    actionButtons = `<button class="btn-action btn-close" onclick="changeStatus('${item.eventId}', 'Closed')">종료</button>`;
-                }
+        async function fetchDashboardData() {
+            try {
+                const response = await fetch('/api/dashboard');
+                if (response.ok) {
+                    currentDashboardData = await response.json();
+                    renderTable();
+                }
+            } catch (e) { console.error('수신 오류:', e); }
+        }
 
-                tr.innerHTML = `
-                    <td>${item.lastTime || '-'}</td>
-                    <td>${item.module || '-'}</td>
-                    <td>${item.type || '-'}</td>
-                    <td><strong>${item.severity || 'Normal'}</strong></td>
-                    <td>${statusBadge}</td>
-                    <td>${item.count || 1}</td>
-                    <td>${item.message || '-'}</td>
-                    <td>${actionButtons}</td>
-                `;
-                tbody.appendChild(tr);
-            });
-        }
+        function renderTable() {
+            const tbody = document.getElementById('managerTableBody');
+            tbody.innerHTML = ''; 
+            
+            const fModule = document.getElementById('filterModule').value;
+            const fSeverity = document.getElementById('filterSeverity').value;
+            const fStatus = document.getElementById('filterStatus').value;
 
-        ['filterModule', 'filterSeverity', 'filterStatus'].forEach(id => 
-            document.getElementById(id).addEventListener('change', renderTable)
-        );
+            currentDashboardData.forEach(item => {
+                if (fModule !== 'ALL' && item.module !== fModule) return;
+                if (fSeverity !== 'ALL' && item.severity !== fSeverity) return;
+                if (fStatus !== 'ALL' && item.status !== fStatus) return;
 
-        fetchDashboardData();
-        setInterval(fetchDashboardData, 1000);
-    </script>
+                const tr = document.createElement('tr');
+                tr.className = `row-${item.severity || 'Normal'}`;
+
+                let statusBadge = '';
+                let actionButtons = '';
+                
+                if (item.status === 'Open') {
+                    statusBadge = `<span class="badge open">Open (신규)</span>`;
+                    actionButtons = `<button class="btn-action btn-ack" onclick="changeStatus('${item.eventId}', 'In Progress')">인지</button>`;
+                } else if (item.status === 'In Progress') {
+                    statusBadge = `<span class="badge inprogress">In Progress</span>`;
+                    actionButtons = `<button class="btn-action btn-close" onclick="changeStatus('${item.eventId}', 'Closed')">종료</button>`;
+                }
+
+                tr.innerHTML = `
+                    <td>${item.lastTime || '-'}</td>
+                    <td>${item.module || '-'}</td>
+                    <td>${item.type || '-'}</td>
+                    <td><strong>${item.severity || 'Normal'}</strong></td>
+                    <td>${statusBadge}</td>
+                    <td>${item.count || 1}</td>
+                    <td>${item.message || '-'}</td>
+                    <td>${actionButtons}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        ['filterModule', 'filterSeverity', 'filterStatus'].forEach(id => 
+            document.getElementById(id).addEventListener('change', renderTable)
+        );
+
+        fetchDashboardData();
+        setInterval(fetchDashboardData, 1000);
+    </script>
 </body>
-</html>
