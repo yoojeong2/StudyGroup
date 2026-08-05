@@ -18,18 +18,25 @@ All logic (severity, timing, throttling, pairing) lives in the backend. It serve
 - `PUT /api/events/{eventId}/status` — body `{status: "In Progress" | "Closed"}`; `Closed`
   removes the alarm from the active map immediately.
 
-Alarm model (`std::unordered_map`, Active Key = `module + "|" + type`, mutex-guarded):
+Alarm model (`std::unordered_map`, Active Key = `module + "|" + type`, mutex-guarded; a
+background timer thread also touches the map, so all access is under `g_mtx`):
+- Severity has 5 levels: `Normal < Minor < Major < Critical < Catastrophic` (`bumpSeverity`
+  raises one step, capped at `Catastrophic`).
 - Throttling: same-key events within `THROTTLE_MS` (1000ms) only bump `count` and skip the
   heavy escalation path.
-- Case A — fault-clear pairing: an `INFO` event of a fault type closes (removes) active
-  error-level alarms (`ERROR`/`WARN`) in the same `module`, then registers itself as a new
-  `Open`/`Normal` alarm.
-- Case B — `ERROR`/`WARN`: new → initial severity (`네트워크 단절`/`프로세스 다운` ERROR = `Major`,
-  `리소스 임계치 초과` WARN = `Minor`, else `Normal`); existing → `count++`, `lastTime`/`message`
-  update, then time/count escalation.
-- Escalation thresholds are top-of-file `const` constants, overridable via env vars for
-  testing: `ESC_NET_DISCONNECT_SEC`(180), `ESC_PROCESS_DOWN_SEC`(60), `ESC_PROCESS_DOWN_COUNT`(3),
-  `ESC_RESOURCE_SEC`(300), `THROTTLE_MS`(1000). e.g. `ESC_NET_DISCONNECT_SEC=2 ./server`.
+- Case A — fault-clear pairing (5 sets): an `INFO` recovery type closes the active
+  error-level alarm of its **paired fault type** in the same `module` (`pairedFaultType()`
+  map), then registers itself as a new `Open`/`Normal` alarm. Pairs: 네트워크 단절↔복구,
+  프로세스 다운↔정상화, 리소스 임계치 초과↔정상, 데이터 처리 지연↔처리 정상화, 하드웨어 오류↔정상.
+- Case B — new: initial severity by type (`네트워크 단절`/`프로세스 다운`/`하드웨어 오류` = `Major`;
+  `리소스 임계치 초과`/`데이터 처리 지연` = `Minor`; else `Normal`). Existing: `count++`,
+  `lastTime`/`message` update; when `count` reaches `COUNT_ESCALATION_THRESHOLD` it bumps
+  severity one step (once).
+- Time-based escalation: a background thread scans every `TIMER_SCAN_SEC` and, for any alarm
+  active longer than `ESCALATION_TIMEOUT_SEC` since `firstTime`, bumps severity one step (once).
+- Top-of-file `const` tunables, env-overridable for testing: `THROTTLE_MS`(1000),
+  `COUNT_ESCALATION_THRESHOLD`(3), `ESCALATION_TIMEOUT_SEC`(600), `TIMER_SCAN_SEC`(5).
+  e.g. `ESCALATION_TIMEOUT_SEC=2 TIMER_SCAN_SEC=1 ./server`.
 
 `main.cpp` is an offline (폐쇄망) C++ HTTP server using only two vendored header-only
 libraries in `third_party/` (`httplib.h`, `json.hpp`) — no package manager / internet needed.

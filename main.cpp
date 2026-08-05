@@ -1,20 +1,18 @@
 // =============================================================================
-//  통합 관제 대시보드 - C++ 백엔드 웹 서버 (main.cpp) [엔터프라이즈 리팩토링]
+//  통합 관제 대시보드 - C++ 백엔드 (main.cpp)  [AMCM 엔터프라이즈 표준]
 //
 //  index.html(프론트엔드)와 연동되는 오프라인(폐쇄망) 전용 HTTP 서버.
+//  프론트엔드는 시각화만 담당하고, 심각도 판단/상태 관리/페어링/스로틀링/
+//  시간 기반 상향 등 모든 비즈니스 로직은 이 백엔드가 전담한다.
 //  헤더 온리 라이브러리 2개만 사용: third_party/httplib.h, third_party/json.hpp
 //
-//  빌드 (인터넷/패키지 매니저 불필요):
-//    g++ -std=c++17 -O2 -pthread main.cpp -o server   (또는 CMake / Makefile)
+//  빌드: g++ -std=c++17 -O2 -pthread main.cpp -o server   (또는 CMake / Makefile)
 //  실행: ./server            # 기본 포트 8080, 현재 폴더의 index.html 서빙
 //
-//  [핵심 원칙] 프론트엔드 연산 배제: 심각도 판단/시간 계산/스로틀링/장애-복구
-//  페어링 등 모든 로직을 이 백엔드가 전담한다.
-//
 //  API
-//    POST /api/events                     - 이벤트 수신(수신 규격: module/type/level/message)
-//    GET  /api/dashboard                  - 활성 알람(Open/In Progress) 배열 반환
-//    PUT  /api/events/{eventId}/status     - 상태 변경(In Progress/Closed)
+//    POST /api/events                   - 이벤트 수신 {module,type,level,message}
+//    GET  /api/dashboard                - 활성 알람(Open/In Progress) 배열 반환
+//    PUT  /api/events/{eventId}/status   - 상태 변경 {status}; Closed 시 맵에서 제거
 // =============================================================================
 
 #include "third_party/httplib.h"
@@ -35,6 +33,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -43,8 +42,8 @@ using clock_t_ = std::chrono::system_clock;
 using time_point = clock_t_::time_point;
 
 // -----------------------------------------------------------------------------
-// [상단 const 상수] 상향(Escalation)/스로틀링 기준. 운영 기본값을 두되, 테스트 시
-// 환경변수로만 재정의할 수 있게 하여 실제 코드 경로를 그대로 검증할 수 있다.
+// [상단 const 상수] 스로틀링/상향 기준. 운영 기본값을 두되, 테스트 시 환경변수로만
+// 재정의할 수 있게 하여 실제 코드 경로를 그대로 검증한다.
 // -----------------------------------------------------------------------------
 static long envLong(const char* name, long def) {
     if (const char* e = std::getenv(name)) {
@@ -52,41 +51,55 @@ static long envLong(const char* name, long def) {
     }
     return def;
 }
-static const long THROTTLE_MS            = envLong("THROTTLE_MS", 1000);          // 폭주 방어 1초
-static const long ESC_NET_DISCONNECT_SEC = envLong("ESC_NET_DISCONNECT_SEC", 180); // 네트워크 단절 3분 -> Critical
-static const long ESC_PROCESS_DOWN_SEC   = envLong("ESC_PROCESS_DOWN_SEC", 60);    // 프로세스 다운 1분 -> Critical
-static const long ESC_PROCESS_DOWN_COUNT = envLong("ESC_PROCESS_DOWN_COUNT", 3);   // 프로세스 다운 누적 3건 -> Critical
-static const long ESC_RESOURCE_SEC       = envLong("ESC_RESOURCE_SEC", 300);       // 리소스 임계치 초과 5분 -> Major
+static const long THROTTLE_MS              = envLong("THROTTLE_MS", 1000);            // 폭주 방어 1초
+static const long COUNT_ESCALATION_THRESHOLD = envLong("COUNT_ESCALATION_THRESHOLD", 3); // 누적 3회 -> 1단계 상향
+static const long ESCALATION_TIMEOUT_SEC   = envLong("ESCALATION_TIMEOUT_SEC", 600);  // 지속 10분 -> 1단계 상향
+static const long TIMER_SCAN_SEC           = envLong("TIMER_SCAN_SEC", 5);            // 타임아웃 감시 스레드 주기
 
-// 이벤트 종류 상수
-static const char* T_NET_DISCONNECT = "네트워크 단절";
-static const char* T_PROCESS_DOWN   = "프로세스 다운";
-static const char* T_RESOURCE_OVER  = "리소스 임계치 초과";
-static const char* T_DATA_DELAY     = "데이터 처리 지연";
+// -----------------------------------------------------------------------------
+// 도메인 정의: 5대 이벤트 페어링(장애 <-> 복구)
+// -----------------------------------------------------------------------------
+static const char* T_NET_DISCONNECT = "네트워크 단절";     // ERROR
+static const char* T_PROCESS_DOWN   = "프로세스 다운";     // ERROR
+static const char* T_RESOURCE_OVER  = "리소스 임계치 초과"; // WARN
+static const char* T_DATA_DELAY     = "데이터 처리 지연";   // WARN
+static const char* T_HW_FAULT       = "하드웨어 오류";     // ERROR
 
-static bool isFaultType(const std::string& type) {
-    return type == T_NET_DISCONNECT || type == T_PROCESS_DOWN ||
-           type == T_RESOURCE_OVER  || type == T_DATA_DELAY;
+static const char* T_NET_RECOVER    = "네트워크 복구";     // INFO
+static const char* T_PROCESS_OK     = "프로세스 정상화";   // INFO
+static const char* T_RESOURCE_OK    = "리소스 정상";       // INFO
+static const char* T_DATA_OK        = "처리 정상화";       // INFO
+static const char* T_HW_OK          = "하드웨어 정상";     // INFO
+
+// 복구(정상) 유형 -> 대응 장애 유형. 매칭 없으면 빈 문자열.
+static std::string pairedFaultType(const std::string& recoveryType) {
+    if (recoveryType == T_NET_RECOVER) return T_NET_DISCONNECT;
+    if (recoveryType == T_PROCESS_OK)  return T_PROCESS_DOWN;
+    if (recoveryType == T_RESOURCE_OK) return T_RESOURCE_OVER;
+    if (recoveryType == T_DATA_OK)     return T_DATA_DELAY;
+    if (recoveryType == T_HW_OK)       return T_HW_FAULT;
+    return "";
+}
+static bool isRecoveryType(const std::string& type) {
+    return !pairedFaultType(type).empty();
 }
 static bool isErrorLevel(const std::string& level) {
     return level == "ERROR" || level == "WARN";
 }
 
-// 심각도 랭크(하향 방지용): Normal < Minor < Major < Critical
-static int sevRank(const std::string& s) {
-    if (s == "Critical") return 3;
-    if (s == "Major")    return 2;
-    if (s == "Minor")    return 1;
-    return 0; // Normal
-}
-static const std::string& maxSeverity(const std::string& a, const std::string& b) {
-    return sevRank(a) >= sevRank(b) ? a : b;
+// 심각도 5단계 (낮음 -> 높음). 상향 시 한 단계 위로, Catastrophic 이 최대치.
+static std::string bumpSeverity(const std::string& s) {
+    if (s == "Normal")   return "Minor";
+    if (s == "Minor")    return "Major";
+    if (s == "Major")    return "Critical";
+    if (s == "Critical") return "Catastrophic";
+    return "Catastrophic"; // 이미 최대치
 }
 
-// [초기 심각도 매핑] 신규 알람 등록 시
-static std::string initialSeverity(const std::string& type, const std::string& level) {
-    if (level == "ERROR" && (type == T_NET_DISCONNECT || type == T_PROCESS_DOWN)) return "Major";
-    if (level == "WARN"  && type == T_RESOURCE_OVER) return "Minor";
+// [초기 가중치 차등화] 신규 알람의 초기 severity (유형 기반)
+static std::string initialSeverity(const std::string& type) {
+    if (type == T_NET_DISCONNECT || type == T_PROCESS_DOWN || type == T_HW_FAULT) return "Major";
+    if (type == T_RESOURCE_OVER  || type == T_DATA_DELAY) return "Minor";
     return "Normal";
 }
 
@@ -104,9 +117,12 @@ struct Alarm {
     time_point  first_time;
     time_point  last_time;
     std::string message;
+    bool        escalated_by_count   = false; // 카운트 상향 1회성 처리 플래그
+    bool        escalated_by_timeout = false; // 타임아웃 상향 1회성 처리 플래그
 };
 
-// 활성 알람 맵: Active Key = module + "|" + type
+// 활성 알람 맵: Active Key = module + "|" + type. 멀티스레드(요청 처리 + 타이머)에서
+// 접근하므로 반드시 g_mtx 로 보호한다.
 static std::unordered_map<std::string, Alarm> g_active;
 static std::mutex g_mtx;
 static std::atomic<long> g_seq{0};
@@ -125,15 +141,14 @@ static std::string toTimeString(const time_point& tp) {
     std::time_t t = clock_t_::to_time_t(tp);
     std::tm tm_buf{};
 #if defined(_WIN32)
-    localtime_s(&tm_buf, &t);   // MSVC
+    localtime_s(&tm_buf, &t);
 #else
-    localtime_r(&t, &tm_buf);   // POSIX
+    localtime_r(&t, &tm_buf);
 #endif
     char buf[32];
     std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_buf);
     return std::string(buf);
 }
-
 static long secondsSince(const time_point& from, const time_point& to) {
     return std::chrono::duration_cast<std::chrono::seconds>(to - from).count();
 }
@@ -142,33 +157,28 @@ static long millisSince(const time_point& from, const time_point& to) {
 }
 
 // -----------------------------------------------------------------------------
-// POST /api/events 처리: 라우팅(Case A/B) -> 스로틀링 -> 심각도 판단/상향
+// POST /api/events : 라우팅(Case A/B) -> 스로틀링 -> 카운트 상향
 // -----------------------------------------------------------------------------
 static void handlePostEvent(const std::string& module,
                             const std::string& type,
                             const std::string& level,
                             const std::string& message) {
     const time_point now = clock_t_::now();
-    // 메시지가 비어 있으면(현 프론트엔드는 message 미전송) 기본 메시지 생성
     const std::string msg = !message.empty()
         ? message
         : ("[" + module + "] " + type + " (" + level + ")");
 
     std::lock_guard<std::mutex> lock(g_mtx);
 
-    // ===== [Case A] 복구 이벤트(INFO) 수신 - 장애-복구 페어링 =====
-    // level == INFO 이고 복구 유형(장애 종류)일 때: 동일 module 의 진행 중 에러 알람(짝꿍)을
-    // 백엔드가 즉시 Closed 처리(맵에서 제거)하고, 복구 이벤트 자체를 새 활성 알람으로 등록.
-    if (level == "INFO" && isFaultType(type)) {
-        for (auto it = g_active.begin(); it != g_active.end(); ) {
-            const Alarm& a = it->second;
-            const bool pairedError = (a.module == module) && isErrorLevel(a.level) &&
-                                     (a.status == "Open" || a.status == "In Progress");
-            if (pairedError) {
-                it = g_active.erase(it);   // Closed -> 활성 맵에서 즉시 제거(메모리 회수)
-            } else {
-                ++it;
-            }
+    // ===== [Case A] 복구(INFO) 이벤트 - 장애-복구 페어링 (Auto-Clear) =====
+    // 복구 유형이면 동일 module 의 짝꿍 장애 알람을 Closed 처리(맵에서 즉시 제거)하고,
+    // 복구 이벤트 자체를 신규 알람(Open/Normal)으로 등록한다.
+    if (level == "INFO" && isRecoveryType(type)) {
+        const std::string faultType = pairedFaultType(type);
+        auto fit = g_active.find(activeKey(module, faultType));
+        if (fit != g_active.end() && isErrorLevel(fit->second.level) &&
+            (fit->second.status == "Open" || fit->second.status == "In Progress")) {
+            g_active.erase(fit);  // 짝꿍 장애 알람 Closed -> 즉시 제거(메모리 회수)
         }
         Alarm rec;
         rec.eventId    = newEventId();
@@ -185,18 +195,18 @@ static void handlePostEvent(const std::string& module,
         return;
     }
 
-    // ===== [Case B] 일반 이벤트(ERROR/WARN 등) 수신 =====
+    // ===== [Case B] 에러/경고 등 일반 이벤트 =====
     const std::string key = activeKey(module, type);
     auto it = g_active.find(key);
 
-    // 신규 발생 (활성 항목 없음)
+    // 신규 발생
     if (it == g_active.end()) {
         Alarm rec;
         rec.eventId    = newEventId();
         rec.module     = module;
         rec.type       = type;
         rec.level      = level;
-        rec.severity   = initialSeverity(type, level);
+        rec.severity   = initialSeverity(type);   // 초기 가중치 차등화
         rec.status     = "Open";
         rec.count      = 1;
         rec.first_time = now;
@@ -206,39 +216,56 @@ static void handlePostEvent(const std::string& module,
         return;
     }
 
-    // 기존 활성 항목 업데이트
+    // 기존 장애 업데이트
     Alarm& a = it->second;
     const long gapMs = millisSince(a.last_time, now);
     a.count += 1;
     a.last_time = now;
 
-    // [이벤트 폭주 방어(Throttling)] 동일 키가 1초 이내 폭주하면 count 만 올리고
-    // 무거운 상향(Escalation)/메시지 처리는 스킵한다.
+    // [스로틀링] 동일 키가 1초 이내 폭주 -> count 만 올리고 무거운 상향 검사 스킵
     if (gapMs < THROTTLE_MS) {
         return;
     }
 
     a.message = msg; // message 덮어쓰기
 
-    // [시간/누적 기반 상향(Escalation)] - 하향은 하지 않음(max 사용)
-    const long sustainedSec = secondsSince(a.first_time, now);
-    std::string escalated = a.severity;
-    if (a.type == T_NET_DISCONNECT) {
-        if (sustainedSec >= ESC_NET_DISCONNECT_SEC) escalated = "Critical";
-    } else if (a.type == T_PROCESS_DOWN) {
-        if (sustainedSec >= ESC_PROCESS_DOWN_SEC || a.count >= ESC_PROCESS_DOWN_COUNT) escalated = "Critical";
-    } else if (a.type == T_RESOURCE_OVER) {
-        if (sustainedSec >= ESC_RESOURCE_SEC) escalated = "Major";
+    // [카운트 상향] 누적 count >= 임계치 도달 시 1단계 상향(1회성)
+    if (!a.escalated_by_count && a.count >= COUNT_ESCALATION_THRESHOLD) {
+        a.severity = bumpSeverity(a.severity);
+        a.escalated_by_count = true;
     }
-    a.severity = maxSeverity(a.severity, escalated);
 }
 
 // -----------------------------------------------------------------------------
-// GET /api/dashboard 직렬화: 활성 알람(Open/In Progress)만, 최근 발생 순 정렬
+// [주기 타임아웃 상향 스레드] firstTime 대비 ESCALATION_TIMEOUT_SEC 이상 지속 중인
+// 활성 이벤트의 severity 를 1단계 상향(이벤트당 1회). Active Map 은 Mutex 로 보호.
+// -----------------------------------------------------------------------------
+static std::atomic<bool> g_stop_timer{false};
+static void timerLoop() {
+    while (!g_stop_timer.load()) {
+        for (long i = 0; i < TIMER_SCAN_SEC * 10 && !g_stop_timer.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (g_stop_timer.load()) break;
+
+        const time_point now = clock_t_::now();
+        std::lock_guard<std::mutex> lock(g_mtx);
+        for (auto& kv : g_active) {
+            Alarm& a = kv.second;
+            if (!a.escalated_by_timeout &&
+                secondsSince(a.first_time, now) >= ESCALATION_TIMEOUT_SEC) {
+                a.severity = bumpSeverity(a.severity);
+                a.escalated_by_timeout = true;
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// GET /api/dashboard : 활성 알람(Open/In Progress)만, 최근 발생 순 정렬
 // -----------------------------------------------------------------------------
 static json buildDashboard() {
     std::lock_guard<std::mutex> lock(g_mtx);
-
     std::vector<const Alarm*> rows;
     rows.reserve(g_active.size());
     for (const auto& kv : g_active) {
@@ -266,24 +293,19 @@ static json buildDashboard() {
     return arr;
 }
 
-// PUT /api/events/{eventId}/status : 상태 변경. Closed 는 맵에서 즉시 제거.
-// 반환: true = 처리됨, false = 해당 eventId 없음
+// PUT /api/events/{eventId}/status : Closed 는 맵에서 즉시 제거. true=처리, false=미존재.
 static bool updateStatus(const std::string& eventId, const std::string& status) {
     std::lock_guard<std::mutex> lock(g_mtx);
     for (auto it = g_active.begin(); it != g_active.end(); ++it) {
         if (it->second.eventId == eventId) {
-            if (status == "Closed") {
-                g_active.erase(it);          // 메모리 누수 방지: 활성 맵에서 즉시 제거
-            } else {
-                it->second.status = status;  // "In Progress"
-            }
+            if (status == "Closed") g_active.erase(it);
+            else                    it->second.status = status;
             return true;
         }
     }
     return false;
 }
 
-// index.html 파일 내용을 읽어 반환 (없으면 빈 문자열)
 static std::string readIndexHtml() {
     const char* env = std::getenv("INDEX_FILE");
     std::string path = env ? env : "index.html";
@@ -306,7 +328,7 @@ static void handleSignal(int /*sig*/) {
 
 int main(int argc, char** argv) {
 #if defined(_WIN32)
-    SetConsoleOutputCP(CP_UTF8);   // Windows 콘솔 한글 깨짐 방지
+    SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 #endif
 
@@ -317,7 +339,6 @@ int main(int argc, char** argv) {
 
     httplib::Server svr;
 
-    // 정적 프론트엔드 서빙 (같은 오리진 유지)
     auto serveIndex = [](const httplib::Request&, httplib::Response& res) {
         std::string html = readIndexHtml();
         if (html.empty()) {
@@ -364,9 +385,9 @@ int main(int argc, char** argv) {
             const std::string eventId = req.matches[1];
             json body = json::parse(req.body);
             std::string status = body.value("status", "");
-            if (status != "In Progress" && status != "Closed") {
+            if (status != "Open" && status != "In Progress" && status != "Closed") {
                 res.status = 400;
-                res.set_content(R"({"error":"status 는 'In Progress' 또는 'Closed' 여야 함"})",
+                res.set_content(R"({"error":"status 는 Open/In Progress/Closed 중 하나여야 함"})",
                                 "application/json; charset=utf-8");
                 return;
             }
@@ -384,18 +405,24 @@ int main(int argc, char** argv) {
         }
     });
 
-    // 종료 시그널 등록 (우아한 종료)
+    // 종료 시그널 + 타임아웃 상향 스레드
     g_server = &svr;
     std::signal(SIGINT, handleSignal);
     std::signal(SIGTERM, handleSignal);
+    std::thread timer(timerLoop);
 
-    printf("통합 관제 백엔드 서버 시작: http://localhost:%d\n", port);
-    printf("  스로틀=%ldms | 네트워크단절 %lds | 프로세스다운 %lds/누적%ld | 리소스 %lds -> Critical/Major\n",
-           THROTTLE_MS, ESC_NET_DISCONNECT_SEC, ESC_PROCESS_DOWN_SEC, ESC_PROCESS_DOWN_COUNT, ESC_RESOURCE_SEC);
+    printf("통합 관제 백엔드(AMCM 표준) 시작: http://localhost:%d\n", port);
+    printf("  스로틀=%ldms | 카운트상향 >=%ld | 타임아웃상향 %lds | 감시주기 %lds\n",
+           THROTTLE_MS, COUNT_ESCALATION_THRESHOLD, ESCALATION_TIMEOUT_SEC, TIMER_SCAN_SEC);
     printf("종료하려면 Ctrl+C 를 누르세요.\n");
     fflush(stdout);
 
     const bool ok = svr.listen("0.0.0.0", port);
+
+    // 서버 종료 -> 타이머 스레드 정리
+    g_stop_timer.store(true);
+    if (timer.joinable()) timer.join();
+
     if (!ok && !g_shutting_down.load()) {
         fprintf(stderr, "서버 시작 실패 (포트 %d 사용 중일 수 있음)\n", port);
         return 1;
